@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from project.extensions import db
 
 class User(db.Model):
@@ -11,7 +11,7 @@ class User(db.Model):
     senha = db.Column(db.String(128), nullable=False)
     access_expiration = db.Column(db.DateTime, nullable=False,
                                   default=lambda: datetime.utcnow() + timedelta(days=14))
-    # Opcional: número de telefone para identificar o WhatsApp
+    # Telefone para WhatsApp (opcional)
     telefone = db.Column(db.String(50), unique=True, nullable=True)
 
     def to_dict(self):
@@ -29,7 +29,7 @@ class Goal(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     descricao = db.Column(db.String(255), nullable=False)
-    meta_semana = db.Column(db.String(255), nullable=True)  # Ex.: "3 treinos, 2 dietas"
+    meta_semana = db.Column(db.String(255), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -60,7 +60,7 @@ class Reminder(db.Model):
 class Checkin(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    respostas = db.Column(db.JSON, nullable=False)  # Armazena respostas do check-in semanal
+    respostas = db.Column(db.JSON, nullable=False)  # Armazena as respostas do check-in
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -74,8 +74,8 @@ class Checkin(db.Model):
 class WaterConsumption(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    data = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
-    quantidade = db.Column(db.Integer, default=0)  # Em ml
+    data = db.Column(db.Date, nullable=False, default=date.today)
+    quantidade = db.Column(db.Integer, default=0)  # em ml
 
     def to_dict(self):
         return {
