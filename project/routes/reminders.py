@@ -2,53 +2,51 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from project.models import Reminder
 from project.extensions import db
-import datetime
-from marshmallow import Schema, fields, ValidationError
 
 reminders_bp = Blueprint('reminders', __name__)
 
-class ReminderSchema(Schema):
-    texto = fields.Str(required=True)
-    horario = fields.Str(required=True)  # Envie no formato "HH:MM"
-    repeticao = fields.Str(required=False, load_default="diario")
-
-reminder_schema = ReminderSchema()
+@reminders_bp.route('/', methods=['GET'])
+@jwt_required()
+def get_reminders():
+    user_id = get_jwt_identity()
+    reminders = Reminder.query.filter_by(user_id=user_id).all()
+    result = [reminder.to_dict() for reminder in reminders]
+    return jsonify(result), 200
 
 @reminders_bp.route('/', methods=['POST'])
 @jwt_required()
 def create_reminder():
     user_id = get_jwt_identity()
     data = request.get_json()
-    try:
-        valid_data = reminder_schema.load(data)
-    except ValidationError as err:
-        return jsonify(err.messages), 422
-
-    # Converte o horário de string para time
-    try:
-        horario = datetime.datetime.strptime(valid_data['horario'], "%H:%M").time()
-    except Exception as e:
-        return jsonify({"error": "Formato de horário inválido. Use HH:MM"}), 422
-
-    novo_lembrete = Reminder(
-        user_id=user_id,
-        texto=valid_data['texto'],
-        horario=horario,
-        repeticao=valid_data.get('repeticao', 'diario')
-    )
-    db.session.add(novo_lembrete)
+    if not data.get('mensagem') or not data.get('intervalo'):
+        return jsonify({"error": "Campos 'mensagem' e 'intervalo' são obrigatórios."}), 400
+    reminder = Reminder(user_id=user_id, mensagem=data.get('mensagem'), intervalo=data.get('intervalo'))
+    db.session.add(reminder)
     db.session.commit()
-    return jsonify({"message": "Lembrete criado", "reminder_id": novo_lembrete.id}), 201
+    return jsonify(reminder.to_dict()), 201
 
-@reminders_bp.route('/', methods=['GET'])
+@reminders_bp.route('/<int:reminder_id>', methods=['PUT'])
 @jwt_required()
-def get_reminders():
+def update_reminder(reminder_id):
     user_id = get_jwt_identity()
-    lembretes = Reminder.query.filter_by(user_id=user_id).all()
-    resultado = [{
-        "id": lembrete.id,
-        "texto": lembrete.texto,
-        "horario": lembrete.horario.strftime("%H:%M"),
-        "repeticao": lembrete.repeticao
-    } for lembrete in lembretes]
-    return jsonify(resultado), 200
+    reminder = Reminder.query.filter_by(id=reminder_id, user_id=user_id).first()
+    if not reminder:
+        return jsonify({"error": "Lembrete não encontrado."}), 404
+    data = request.get_json()
+    if 'mensagem' in data:
+        reminder.mensagem = data['mensagem']
+    if 'intervalo' in data:
+        reminder.intervalo = data['intervalo']
+    db.session.commit()
+    return jsonify(reminder.to_dict()), 200
+
+@reminders_bp.route('/<int:reminder_id>', methods=['DELETE'])
+@jwt_required()
+def delete_reminder(reminder_id):
+    user_id = get_jwt_identity()
+    reminder = Reminder.query.filter_by(id=reminder_id, user_id=user_id).first()
+    if not reminder:
+        return jsonify({"error": "Lembrete não encontrado."}), 404
+    db.session.delete(reminder)
+    db.session.commit()
+    return jsonify({"message": "Lembrete removido com sucesso."}), 200
