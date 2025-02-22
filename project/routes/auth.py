@@ -15,7 +15,7 @@ class UserSchema(Schema):
     idade = fields.Int(required=True)
     email = fields.Email(required=True)
     senha = fields.Str(required=True, load_only=True, validate=validate.Length(min=6))
-    plan_duration = fields.Int(missing=14)  # Por padrão 14 dias
+    plan_duration = fields.Int(missing=14)
 
 user_schema = UserSchema()
 
@@ -28,7 +28,7 @@ def register():
         return jsonify(err.messages), 422
 
     if User.query.filter_by(email=data.get('email')).first():
-        return jsonify({"error": "Usuário já cadastrado."}), 400
+        return jsonify({"error": "Usuário já cadastrado."}), 400
 
     hashed_pw = bcrypt.hashpw(data.get('senha').encode('utf-8'), bcrypt.gensalt())
     plan_duration = data.get('plan_duration', 14)
@@ -45,7 +45,7 @@ def register():
     )
     db.session.add(novo_usuario)
     db.session.commit()
-    return jsonify({"message": "Usuário registrado com sucesso!"}), 201
+    return jsonify({"message": "Usuário registrado com sucesso!"}), 201
 
 @auth_bp.route('/login', methods=['POST'])
 def login():
@@ -61,4 +61,4 @@ def login():
     if usuario and bcrypt.checkpw(senha.encode('utf-8'), usuario.senha.encode('utf-8')):
         token = create_access_token(identity=usuario.id, expires_delta=timedelta(hours=1))
         return jsonify({"access_token": token}), 200
-    return jsonify({"error": "Credenciais inválidas"}), 401
+    return jsonify({"error": "Credenciais inválidas"}), 401

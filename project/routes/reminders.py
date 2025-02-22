@@ -19,7 +19,7 @@ def create_reminder():
     user_id = get_jwt_identity()
     data = request.get_json()
     if not data.get('mensagem') or not data.get('intervalo'):
-        return jsonify({"error": "Campos 'mensagem' e 'intervalo' são obrigatórios."}), 400
+        return jsonify({"error": "Campos 'mensagem' e 'intervalo' são obrigatórios."}), 400
     reminder = Reminder(user_id=user_id, mensagem=data.get('mensagem'), intervalo=data.get('intervalo'))
     db.session.add(reminder)
     db.session.commit()
@@ -31,7 +31,7 @@ def update_reminder(reminder_id):
     user_id = get_jwt_identity()
     reminder = Reminder.query.filter_by(id=reminder_id, user_id=user_id).first()
     if not reminder:
-        return jsonify({"error": "Lembrete não encontrado."}), 404
+        return jsonify({"error": "Lembrete não encontrado."}), 404
     data = request.get_json()
     if 'mensagem' in data:
         reminder.mensagem = data['mensagem']
@@ -46,7 +46,8 @@ def delete_reminder(reminder_id):
     user_id = get_jwt_identity()
     reminder = Reminder.query.filter_by(id=reminder_id, user_id=user_id).first()
     if not reminder:
-        return jsonify({"error": "Lembrete não encontrado."}), 404
+        return jsonify({"error": "Lembrete não encontrado."}), 404
     db.session.delete(reminder)
     db.session.commit()
     return jsonify({"message": "Lembrete removido com sucesso."}), 200
+

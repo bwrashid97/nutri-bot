@@ -19,7 +19,7 @@ def create_goal():
     user_id = get_jwt_identity()
     data = request.get_json()
     if not data.get('descricao'):
-        return jsonify({"error": "Descrição é obrigatória."}), 400
+        return jsonify({"error": "Descrição é obrigatória."}), 400
     goal = Goal(user_id=user_id, descricao=data.get('descricao'), meta_semana=data.get('meta_semana'))
     db.session.add(goal)
     db.session.commit()
@@ -31,7 +31,7 @@ def update_goal(goal_id):
     user_id = get_jwt_identity()
     goal = Goal.query.filter_by(id=goal_id, user_id=user_id).first()
     if not goal:
-        return jsonify({"error": "Meta não encontrada."}), 404
+        return jsonify({"error": "Meta não encontrada."}), 404
     data = request.get_json()
     if 'descricao' in data:
         goal.descricao = data['descricao']
@@ -46,7 +46,7 @@ def delete_goal(goal_id):
     user_id = get_jwt_identity()
     goal = Goal.query.filter_by(id=goal_id, user_id=user_id).first()
     if not goal:
-        return jsonify({"error": "Meta não encontrada."}), 404
+        return jsonify({"error": "Meta não encontrada."}), 404
     db.session.delete(goal)
     db.session.commit()
     return jsonify({"message": "Meta removida com sucesso."}), 200
