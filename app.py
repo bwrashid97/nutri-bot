@@ -1,194 +1,227 @@
-import os
-import openai
-from datetime import datetime, date, timedelta
+# app.py
+
 from flask import Flask, request, jsonify
-from flask_jwt_extended import JWTManager
+from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
-from project.config import Config
-from project.extensions import db
-from twilio.rest import Client
+from apscheduler.schedulers.background import BackgroundScheduler
+from datetime import datetime
+from routes.whatsapp import whatsapp_bp
 
-# Blueprints REST (para testes via API)
-from project.routes.auth import auth_bp
-from project.routes.goals import goals_bp
-from project.routes.reminders import reminders_bp
-from project.routes.checkin import checkin_bp
+# ========== CONFIGURAÇÃO BÁSICA DO FLASK & DB ==========
+app = Flask(__name__)
+# Exemplo de conexão local. Ajuste para o seu banco real:
+app.register_blueprint(whatsapp_bp)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///nutri_bot.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SECRET_KEY'] = 'sua-secret-key'
+db = SQLAlchemy(app)
+migrate = Migrate(app, db)
 
-# Models
-from project.models import User, WaterConsumption
-
-def get_diet_response(user_question):
-    if Config.MOCK_INTEGRATIONS:
-        return f"Resposta simulada para: '{user_question}'"
-    openai.api_key = Config.OPENAI_API_KEY
-    prompt = (
-        "O plano de dieta da cliente inclui receitas low-carb, substituições para carboidratos, "
-        "e links específicos: https://www.exemplo.com/receitas-saudaveis e https://www.exemplo.com/dicas-dieta.\n"
-        f"Pergunta: {user_question}\nResposta:"
-    )
-    response = openai.Completion.create(
-        engine="text-davinci-003",
-        prompt=prompt,
-        max_tokens=150,
-        temperature=0.7
-    )
-    return response.choices[0].text.strip()
-
-def get_training_tip(prompt):
-    if Config.MOCK_INTEGRATIONS:
-        return f"Dica simulada para: '{prompt}'"
-    openai.api_key = Config.OPENAI_API_KEY
-    response = openai.Completion.create(
-        engine="text-davinci-003",
-        prompt=prompt,
-        max_tokens=50
-    )
-    return response.choices[0].text.strip()
-
-def send_sms(to, message):
-    if Config.MOCK_INTEGRATIONS:
-        print(f"[MOCK SMS] Para: {to} - Mensagem: {message}")
-        return "fake_sms_sid"
-    if not all([Config.TWILIO_ACCOUNT_SID, Config.TWILIO_AUTH_TOKEN, Config.TWILIO_WHATSAPP_NUMBER]):
-        raise Exception("Twilio não configurado.")
-    client = Client(Config.TWILIO_ACCOUNT_SID, Config.TWILIO_AUTH_TOKEN)
-    sms = client.messages.create(
-        body=message,
-        from_=Config.TWILIO_WHATSAPP_NUMBER,
-        to=to
-    )
-    return sms.sid
-
-def send_interactive_message(to, text):
-    """
-    Envia ou simula envio de mensagem (com ou sem botões).
-    Para mensagens interativas reais, formatar JSON conforme doc do WhatsApp/Twilio.
-    """
-    if Config.MOCK_INTEGRATIONS:
-        print(f"[MOCK Interactive] Para {to}: {text}")
-        return "fake_interactive_sid"
-    client = Client(Config.TWILIO_ACCOUNT_SID, Config.TWILIO_AUTH_TOKEN)
-    message = client.messages.create(
-        from_=Config.TWILIO_WHATSAPP_NUMBER,
-        to=to,
-        body=text
-    )
-    return message.sid
-
-def create_app():
-    app = Flask(__name__)
-    app.config.from_object(Config)
+# ========== MODELO DE USUÁRIO ========== 
+class User(db.Model):
+    __tablename__ = "users"
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    phone = db.Column(db.String(50), unique=True, nullable=False)
+    name = db.Column(db.String(100), nullable=True)
     
-    db.init_app(app)
-    Migrate(app, db)
-    JWTManager(app)
+    # Colunas para controle de fluxo conversacional:
+    current_flow = db.Column(db.String(50), nullable=True)
+    flow_step = db.Column(db.Integer, default=0)
+    
+    # Exemplo: colunas de autenticação
+    email = db.Column(db.String(150), nullable=True)
+    password_hash = db.Column(db.String(200), nullable=True)
+    is_active = db.Column(db.Boolean, default=True)
 
-    # Registro dos blueprints REST
-    app.register_blueprint(auth_bp, url_prefix='/auth')
-    app.register_blueprint(goals_bp, url_prefix='/goals')
-    app.register_blueprint(reminders_bp, url_prefix='/reminders')
-    app.register_blueprint(checkin_bp, url_prefix='/checkin')
+# Exemplo de outro modelo para Goals, Checkins etc. (Opcional)
+class Goal(db.Model):
+    __tablename__ = "goals"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    goal_text = db.Column(db.String(200), nullable=False)
 
-    @app.route('/')
-    def index():
-        return "Bot WhatsApp rodando!"
+# Caso precise de Checkin, Reminders etc., crie modelos semelhantes:
+# class Checkin(db.Model):
+#     ...
+# class Reminder(db.Model):
+#     ...
 
-    @app.route('/webhook/whatsapp', methods=['POST'])
-    def whatsapp_webhook():
-        from_number = request.form.get('From')  # 'whatsapp:+551199999999'
-        body = request.form.get('Body')         # Texto digitado ou ID do botão
-        lower_body = body.strip().lower() if body else ""
+# ========== (1) REMOÇÃO/ADAPTAÇÃO DO PAINEL ADMIN ========== 
+# Se antes existia algo como:
+#
+# @app.route('/admin')
+# def admin_panel():
+#     # Renderizava template jinja2
+#     # Vamos comentar/remover para focar no fluxo WhatsApp
+#     pass
+#
+# Simplesmente REMOVA ou COMENTE esse trecho.
 
-        admin_number = "whatsapp:+5511999999999"  # Ajuste para o número admin real
-        if from_number == admin_number:
-            response_text = process_admin_message(lower_body, from_number)
-        else:
-            response_text = process_user_message(lower_body, from_number)
 
-        send_interactive_message(from_number, response_text)
-        return "OK", 200
+# ========== (2) CRIAR ROTA /WEBHOOK/WHATSAPP PARA RECEBER MENSAGENS ==========
 
-    def process_admin_message(body, from_number):
-        if body in ["1", "usuarios"]:
-            users = User.query.all()
-            msg = "Lista de Usuários:\n"
-            for u in users:
-                days_left = (u.access_expiration - datetime.utcnow()).days
-                msg += f"{u.nome} ({u.email}): {days_left} dias restantes\n"
-            msg += "\n[2] Reativar usuário\nEnvie o número correspondente."
-            return msg
+@app.route('/webhook/whatsapp', methods=['POST'])
+def whatsapp_webhook():
+    """
+    Recebe mensagens enviadas pelo usuário via Twilio (WhatsApp).
+    """
+    # Twilio geralmente envia dados via form-encoded:
+    from_number = request.form.get('From')  # something como 'whatsapp:+5511999999999'
+    body = request.form.get('Body')         # texto digitado pelo usuário
+    
+    if not body:
+        body = ""  # Evitar erro se for None
 
-        elif body in ["2", "reativar"]:
-            # Transição de estado simples: peça o email do usuário
-            return "Por favor, informe o email do usuário que deseja reativar."
+    # Limpamos e deixamos em lowercase para comparar
+    body_lower = body.strip().lower()
 
-        else:
-            # Se for um email, tente reativar
-            user = User.query.filter_by(email=body).first()
-            if user:
-                user.access_expiration = datetime.utcnow() + timedelta(days=30)
-                db.session.commit()
-                return f"O acesso de {user.nome} foi reativado por mais 30 dias!"
-            else:
-                return ("Olá, admin! Escolha uma opção:\n"
-                        "1. Ver usuários\n"
-                        "2. Reativar usuário\n"
-                        "Envie o número ou email de um usuário para reativar.")
+    # Buscamos o usuário no BD pelo número
+    user = User.query.filter_by(phone=from_number).first()
 
-    def process_user_message(body, from_number):
-        # Fluxo para usuários normais
-        if body in ["+500ml", "add_500"]:
-            return registrar_consumo_agua(from_number, 500)
-        elif body in ["+1000ml", "add_1000"]:
-            return registrar_consumo_agua(from_number, 1000)
-        elif body in ["menu", "início"]:
-            return ("Olá! Escolha uma opção:\n"
-                    "1. Registrar consumo de água\n"
-                    "2. Definir/Editar metas\n"
-                    "3. Realizar check-in semanal\n"
-                    "4. Consultar dicas de treino/dieta\n"
-                    "[cancel] ou [voltar] para sair.")
-        elif body in ["cancel", "voltar", "refazer"]:
-            return "Voltando ao menu principal. Digite 'menu' para ver as opções."
-        elif body in ["1"]:
-            # Exemplo simples: responde com botões
-            return ("Para registrar água, use +500ml ou +1000ml.\n"
-                    "Ou envie 'menu' para voltar.")
-        elif body in ["3"]:
-            # Exemplo de check-in
-            return iniciar_checkin(from_number)
-        else:
-            return "Não entendi sua solicitação. Envie 'menu' para ver as opções."
-
-    def registrar_consumo_agua(from_number, ml_adicionais):
-        # Encontre o user no BD por telefone (opcionalmente)
-        user = User.query.filter_by(telefone=from_number).first()
-        if not user:
-            # Se não encontrar, fallback
-            return "Usuário não cadastrado com este número. Envie 'menu' para voltar."
-
-        # Registrar ou atualizar WaterConsumption
-        hoje = date.today()
-        cons = WaterConsumption.query.filter_by(user_id=user.id, data=hoje).first()
-        if not cons:
-            cons = WaterConsumption(user_id=user.id, data=hoje, quantidade=0)
-            db.session.add(cons)
-        cons.quantidade += ml_adicionais
+    if not user:
+        # Se não achou, você decide se cadastra automaticamente ou avisa o usuário
+        # Para teste, vamos criar o usuário "on the fly"
+        user = User(phone=from_number, name="Novo Usuário")
+        db.session.add(user)
         db.session.commit()
+        send_whatsapp_message(from_number, "Olá! Você foi cadastrado automaticamente. Qual seu nome?")
+        return jsonify({'status': 'new_user_created'})
 
-        # Opcional: se quiser meta de água, use Goal ou outro campo
-        return f"Você adicionou {ml_adicionais}ml hoje. Total de {cons.quantidade}ml para o dia!"
+    # Se o usuário já existe, verificamos se está em algum fluxo
+    if user.current_flow == 'checkin':
+        return handle_checkin_flow(user, body)
 
-    def iniciar_checkin(from_number):
-        # Poderíamos criar perguntas específicas e armazenar estado
-        # Por ora, apenas exemplo:
-        return ("Check-in semanal iniciado! Responda às perguntas:\n"
-                "1. Quantos dias seguiu a dieta?\n"
-                "2. Quantos dias treinou?\n"
-                "Envie as respostas em sequência ou 'menu' para voltar.")
+    # Caso não esteja em fluxo nenhum, oferecemos um menu simples
+    if body_lower in ['menu', 'oi', 'olá', 'hello']:
+        response_text = (
+            "Olá! Selecione uma opção:\n"
+            "1. Registrar consumo\n"
+            "2. Consultar metas\n"
+            "3. Iniciar check-in semanal"
+        )
+        send_whatsapp_message(from_number, response_text)
+    
+    elif body_lower == '1':
+        # Exemplo: registrar consumo de água, etc.
+        send_whatsapp_message(from_number, "Okay, vou registrar seu consumo. Quantos ml?")
+    
+    elif body_lower == '2':
+        # Consultar metas do usuário
+        goals = Goal.query.filter_by(user_id=user.id).all()
+        if not goals:
+            send_whatsapp_message(from_number, "Você não possui metas cadastradas.")
+        else:
+            metas = "\n".join([f"- {g.goal_text}" for g in goals])
+            send_whatsapp_message(from_number, f"Sua(s) meta(s):\n{metas}")
+    
+    elif body_lower == '3':
+        # Inicia o fluxo de check-in
+        user.current_flow = 'checkin'
+        user.flow_step = 1
+        db.session.commit()
+        send_whatsapp_message(from_number, "Vamos iniciar seu check-in! Pergunta 1: Como foi sua alimentação nesta semana?")
+    
+    else:
+        send_whatsapp_message(from_number, "Digite 'menu' para ver as opções.")
+    
+    return jsonify({'status': 'success'})
 
-    return app
+# ========== (3) FUNÇÃO DE ENVIO DE MENSAGEM VIA WHATSAPP ==========
+def send_whatsapp_message(to_number, message_body):
+    """
+    Envia uma mensagem de texto simples via WhatsApp para o usuário.
+    Este exemplo pode ser um mock ou a chamada real da Twilio.
+    """
+    # Se for usar Twilio real, descomente e configure:
+    #
+    # from twilio.rest import Client
+    # account_sid = os.getenv('TWILIO_ACCOUNT_SID')
+    # auth_token = os.getenv('TWILIO_AUTH_TOKEN')
+    # client = Client(account_sid, auth_token)
+    #
+    # message = client.messages.create(
+    #     from_='whatsapp:+SEU_NUMERO_TWILIO',
+    #     body=message_body,
+    #     to=to_number  # lembre de incluir 'whatsapp:' se necessário (ex: f'whatsapp:{to_number}')
+    # )
+    #
+    # return message.sid
 
-if __name__ == '__main__':
-    app = create_app()
+    # Por enquanto, exibe no console (mock):
+    print(f"[MOCK] Enviando WhatsApp para {to_number}: {message_body}")
+    return "mock_message_id"
+
+# ========== (4) FLUXO DE CHECK-IN ==========
+
+def handle_checkin_flow(user, body):
+    """
+    Lida com o fluxo de perguntas do check-in semanal.
+    Dependendo do step em que o usuário está, faz perguntas ou finaliza.
+    """
+    from_number = user.phone
+    step = user.flow_step
+
+    # Exemplo simples de 3 perguntas (pode estender para 10)
+    if step == 1:
+        # Resposta do usuário para a pergunta 1
+        # Salva no BD se quiser, ex: user_checkin_info. Por simplicidade, só imprimimos
+        print(f"[CHECKIN] Resposta da Pergunta 1: {body}")
+        # Avança para a próxima pergunta
+        user.flow_step = 2
+        db.session.commit()
+        send_whatsapp_message(from_number, "Pergunta 2: Quanto tempo de exercício físico você fez essa semana?")
+    
+    elif step == 2:
+        print(f"[CHECKIN] Resposta da Pergunta 2: {body}")
+        user.flow_step = 3
+        db.session.commit()
+        send_whatsapp_message(from_number, "Pergunta 3: Você teve algum desafio ou dificuldade?")
+    
+    elif step == 3:
+        print(f"[CHECKIN] Resposta da Pergunta 3: {body}")
+        # Finaliza
+        user.current_flow = None
+        user.flow_step = 0
+        db.session.commit()
+        send_whatsapp_message(from_number, "Check-in finalizado! Obrigado pelas respostas.")
+    
+    return jsonify({'status': 'checkin_flow_handled'})
+
+# ========== (5) AGENDAMENTO DE MENSAGENS ==========
+scheduler = BackgroundScheduler()
+
+def send_weekly_checkin():
+    """
+    Envia mensagem de início de check-in para todos os usuários ativos
+    que não estejam em um fluxo no momento.
+    Dispara todo sábado às 09:00, por exemplo.
+    """
+    users = User.query.filter_by(is_active=True).all()
+    for user in users:
+        # Se o usuário não estiver em fluxo, iniciamos o check-in
+        if not user.current_flow:
+            user.current_flow = 'checkin'
+            user.flow_step = 1
+            db.session.commit()
+            send_whatsapp_message(user.phone, "Olá! É hora do seu check-in semanal. Pergunta 1: Como foi sua alimentação?")
+        else:
+            # Se já está em algum fluxo, podemos ignorar ou tratar de outra forma
+            print(f"[AGENDADOR] Usuário {user.phone} já está em um fluxo.")
+    
+def start_scheduler():
+    """
+    Inicia o APScheduler, definindo a tarefa de check-in semanal.
+    """
+    # Exemplo de agendamento: todo sábado às 9h
+    scheduler.add_job(send_weekly_checkin, 'cron', day_of_week='sat', hour=9, minute=0)
+    
+    scheduler.start()
+
+# ========== APP RUN ==========
+
+if __name__ == "__main__":
+    # Inicia o agendador
+    start_scheduler()
+    
+    # Roda a aplicação Flask
     app.run(debug=True)
